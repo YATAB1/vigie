@@ -1,0 +1,77 @@
+:root {
+  --background: #f7f8fa;
+  --foreground: #14181f;
+  --muted: #5b6472;
+  --border: #d9dee6;
+  --up: #1a7f4b;
+  --down: #b3261e;
+  --pending: #8a6d00;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0e1116;
+    --foreground: #e8ebf0;
+    --muted: #9aa4b2;
+    --border: #2a313c;
+    --up: #4cc38a;
+    --down: #f2877f;
+    --pending: #e0b84a;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  line-height: 1.5;
+}
+
+.home {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 6rem 1.5rem;
+}
+
+.home h1 {
+  margin: 0 0 0.5rem;
+  font-size: 2.5rem;
+  letter-spacing: -0.02em;
+}
+
+.tagline {
+  margin: 0 0 2rem;
+  color: var(--muted);
+  font-size: 1.125rem;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.5rem 0.875rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.9375rem;
+}
+
+.status-dot {
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 50%;
+  background: var(--pending);
+}
+
+.status[data-state="up"] .status-dot {
+  background: var(--up);
+}
+
+.status[data-state="down"] .status-dot {
+  background: var(--down);
+}
