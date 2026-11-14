@@ -1,6 +1,16 @@
 spring:
   application:
     name: vigie-api
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/vigie}
+    username: ${SPRING_DATASOURCE_USERNAME:vigie}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
+  jpa:
+    # No lazy loading while rendering the response: queries happen in services only.
+    open-in-view: false
+    hibernate:
+      # Flyway owns the schema. Hibernate only checks that entities match it.
+      ddl-auto: validate
 
 server:
   port: 8080
@@ -16,3 +26,16 @@ management:
 vigie:
   # Replaced by Maven with the version declared in pom.xml.
   version: "@project.version@"
+  auth:
+    # Base64-encoded HMAC key, at least 32 bytes. No default on purpose:
+    # the application refuses to start without it (except in the dev profile).
+    jwt-secret: ${VIGIE_JWT_SECRET:}
+    issuer: vigie-api
+    access-token-ttl: 15m
+    refresh-token-ttl: 7d
+    # Cookies are only sent over HTTPS. Set to false for local HTTP development.
+    secure-cookies: ${VIGIE_AUTH_SECURE_COOKIES:true}
+  admin:
+    # Optional: creates this administrator at startup if it does not exist yet.
+    email: ${VIGIE_ADMIN_EMAIL:}
+    password: ${VIGIE_ADMIN_PASSWORD:}
