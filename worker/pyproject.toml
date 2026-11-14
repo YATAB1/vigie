@@ -4,10 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vigie-worker"
-version = "0.1.0"
+version = "0.2.0"
 description = "Scan worker for Vigie: consumes jobs from Redis and runs security checks."
 requires-python = ">=3.12"
 dependencies = [
+    "cryptography>=43",
+    "dnspython>=2.6,<3",
     "redis>=5.2,<9",
     "pydantic>=2.9,<3",
     "pydantic-settings>=2.6,<3",
@@ -18,6 +20,7 @@ dev = [
     "fakeredis>=2.26",
     "pytest>=8.3",
     "ruff>=0.8",
+    "trustme>=1.2",
 ]
 
 [project.scripts]

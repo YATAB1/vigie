@@ -12,3 +12,9 @@ class Settings(BaseSettings):
     dead_letter_queue: str = "vigie:jobs:dead"
     # How long one blocking pop waits before the loop re-checks for shutdown.
     poll_timeout_seconds: int = 5
+
+    # Per-connection timeout for scans, in seconds.
+    scan_timeout_seconds: float = 10.0
+    # Scans refuse private, loopback and link-local targets (SSRF protection).
+    # Only ever enable this on a developer machine.
+    allow_private_targets: bool = False
