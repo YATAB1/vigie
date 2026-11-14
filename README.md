@@ -124,6 +124,71 @@ du nombre de tentatives de connexion, et un changement de rôle prend jusqu'à
 tournent sur H2 en mode PostgreSQL ; la migration SQL est validée séparément
 sur PostgreSQL.
 
+## Domaines et scans
+
+| Méthode | Route | Rôle |
+|---|---|---|
+| `POST` | `/api/v1/domains` | Ajoute un domaine et renvoie le défi DNS à publier |
+| `GET` | `/api/v1/domains` | Liste mes domaines |
+| `POST` | `/api/v1/domains/{id}/verify` | Lance la vérification de propriété |
+| `DELETE` | `/api/v1/domains/{id}` | Supprime un domaine et ses rapports |
+| `POST` | `/api/v1/domains/{id}/scans` | Lance un scan (domaine vérifié seulement) |
+| `GET` | `/api/v1/domains/{id}/scans` | Historique des scans |
+| `GET` | `/api/v1/scans/{id}` | Rapport détaillé |
+
+### Preuve de propriété
+
+Vigie ne scanne que les domaines dont l'utilisateur a prouvé la propriété.
+À l'ajout d'un domaine, l'API génère un jeton aléatoire et demande de publier
+un enregistrement DNS :
+
+```
+_vigie-challenge.exemple.com.  TXT  "vigie-verification=<jeton>"
+```
+
+Seul quelqu'un qui contrôle la zone DNS peut le faire. Le worker lit
+l'enregistrement, mais c'est l'API qui décide : elle compare la valeur au jeton
+attendu. Deux utilisateurs qui réclament le même domaine reçoivent des jetons
+différents, donc l'un ne peut pas profiter de la preuve de l'autre.
+
+### Vérifications effectuées
+
+| Catégorie | Vérifications |
+|---|---|
+| TLS | Connexion HTTPS, validité du certificat, date d'expiration, version négociée |
+| En-têtes | HSTS, Content-Security-Policy, X-Content-Type-Options, clickjacking, Referrer-Policy, Permissions-Policy, divulgation de versions, attributs des cookies |
+| Transport | Redirection de HTTP vers HTTPS |
+| Courriel | SPF, DMARC |
+
+Chaque vérification échouée a une gravité et une recommandation de correction.
+Le score part de 100 et perd 40 points par problème critique, 20 par problème
+élevé, 10 par problème moyen et 4 par problème faible. La note va de A à F.
+
+### Protection contre le SSRF
+
+Un scanner se connecte à une adresse choisie par un utilisateur. Sans
+précaution, on pourrait le pointer vers un service interne (la base de données,
+l'adresse de métadonnées d'un fournisseur infonuagique) et lire la réponse dans
+le rapport. Le worker applique donc ces règles :
+
+- **Adresses publiques seulement.** Le nom est résolu une fois, et le scan est
+  refusé si une seule des adresses est privée, locale ou réservée.
+- **Connexion à l'adresse validée.** Le worker se connecte à l'adresse IP
+  vérifiée, pas au nom, pour qu'une seconde réponse DNS ne puisse pas le
+  détourner (DNS rebinding).
+- **Aucune redirection vers un autre hôte.** Seules les redirections internes
+  au domaine vérifié sont suivies, trois au maximum.
+- **Ports fixes** (443 et 80) et lecture des en-têtes uniquement, jamais du
+  contenu des pages.
+- **Double validation** du nom de domaine, par l'API puis par le worker.
+
+L'API, elle, ne contacte jamais le domaine d'un utilisateur : tout le trafic
+sortant passe par le worker, qui n'a accès ni à la base ni aux secrets.
+
+Les résultats renvoyés par le worker ne sont appliqués que s'ils correspondent
+à une tâche que l'API a créée et qui est encore en attente. Un message forgé ou
+rejoué est ignoré.
+
 ## Contrat de messages
 
 L'API et le worker échangent du JSON par deux listes Redis.
@@ -147,6 +212,9 @@ Résultat, déposé dans `vigie:results` :
 }
 ```
 
+Types de tâches : `scan` (analyse complète d'un domaine), `dns_txt` (lecture
+d'enregistrements TXT pour la preuve de propriété) et `ping`.
+
 Un message illisible ou qui ne respecte pas le schéma est déplacé dans
 `vigie:jobs:dead` au lieu d'être perdu. Une tâche dont le traitement échoue
 produit un résultat `failed` : une erreur ne fait jamais tomber le worker.
@@ -156,11 +224,12 @@ produit un résultat `failed` : une erreur ne fait jamais tomber le worker.
 - [x] Structure du dépôt, Docker Compose, CI
 - [x] Squelette des trois services, file de tâches fonctionnelle (`ping`)
 - [x] Comptes : inscription, connexion, rôles
-- [ ] Domaines, avec preuve de propriété par enregistrement DNS
-- [ ] Scans : en-têtes HTTP, TLS, SPF/DMARC, calcul du score
+- [x] Domaines, avec preuve de propriété par enregistrement DNS
+- [x] Scans : en-têtes HTTP, TLS, SPF/DMARC, calcul du score
 - [ ] Tableau de bord et historique
 - [ ] Scans planifiés et alertes
-- [ ] Durcissement : limitation des tentatives de connexion, tests sur PostgreSQL
+- [ ] Durcissement : limitation des tentatives de connexion, tests sur PostgreSQL,
+      détection de TLS 1.0/1.1, revérification périodique de la propriété
 - [ ] Déploiement sur Azure
 
 ## Structure
