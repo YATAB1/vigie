@@ -11,6 +11,13 @@ spring:
     hibernate:
       # Flyway owns the schema. Hibernate only checks that entities match it.
       ddl-auto: validate
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: 6379
+      repositories:
+        # Redis is only used as a job queue, not as a Spring Data store.
+        enabled: false
 
 server:
   port: 8080
@@ -35,6 +42,13 @@ vigie:
     refresh-token-ttl: 7d
     # Cookies are only sent over HTTPS. Set to false for local HTTP development.
     secure-cookies: ${VIGIE_AUTH_SECURE_COOKIES:true}
+  queue:
+    jobs-key: "vigie:jobs"
+    results-key: "vigie:results"
+    # The background thread that reads worker results from Redis.
+    consumer-enabled: true
+    # A scan with no result after this delay is marked as failed.
+    scan-timeout: 5m
   admin:
     # Optional: creates this administrator at startup if it does not exist yet.
     email: ${VIGIE_ADMIN_EMAIL:}
