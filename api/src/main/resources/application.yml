@@ -1,0 +1,18 @@
+spring:
+  application:
+    name: vigie-api
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # Only the health endpoint is reachable over HTTP; everything else
+        # (env, beans, heapdump...) stays closed.
+        include: health
+
+vigie:
+  # Replaced by Maven with the version declared in pom.xml.
+  version: "@project.version@"
