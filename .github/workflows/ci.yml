@@ -79,6 +79,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build all images
+        env:
+          # Placeholder so Compose can resolve the file; no container is started here.
+          VIGIE_JWT_SECRET: ci-build-only
         run: |
           cp .env.example .env
           docker compose build

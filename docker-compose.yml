@@ -31,6 +31,15 @@ services:
 
   api:
     build: ./api
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-vigie}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-vigie}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      VIGIE_JWT_SECRET: ${VIGIE_JWT_SECRET:?Set VIGIE_JWT_SECRET in .env}
+      # The local stack is served over plain HTTP, so cookies cannot be Secure here.
+      VIGIE_AUTH_SECURE_COOKIES: "false"
+      VIGIE_ADMIN_EMAIL: ${VIGIE_ADMIN_EMAIL:-}
+      VIGIE_ADMIN_PASSWORD: ${VIGIE_ADMIN_PASSWORD:-}
     depends_on:
       postgres:
         condition: service_healthy
