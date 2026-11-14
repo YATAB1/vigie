@@ -12,3 +12,6 @@ vigie:
     # Test-only key (48 zero bytes). Never used outside the test suite.
     jwt-secret: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
     secure-cookies: false
+  queue:
+    # Tests call the result handler directly: no Redis is needed.
+    consumer-enabled: false
