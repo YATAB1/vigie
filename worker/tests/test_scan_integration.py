@@ -94,6 +94,22 @@ def https_site(ca):
 
 
 @pytest.fixture
+def legacy_https_site(ca):
+    """An HTTPS server that still accepts TLS 1.0 and 1.1."""
+    import warnings
+
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ca.issue_cert(HOSTNAME).configure_cert(context)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        context.minimum_version = ssl.TLSVersion.TLSv1
+    context.set_ciphers("DEFAULT:@SECLEVEL=0")
+    site = Site(context)
+    yield site
+    site.close()
+
+
+@pytest.fixture
 def http_site():
     site = Site()
     yield site
@@ -284,3 +300,19 @@ def test_dns_txt_job_rejects_an_invalid_name():
     result = run_job({"id": "j4", "type": "dns_txt", "payload": {"name": "10.0.0.1"}})
 
     assert result["status"] == "failed"
+
+
+def test_server_accepting_obsolete_tls_is_reported(ca, legacy_https_site, http_site):
+    report = run_scan(HOSTNAME, environment(ca, legacy_https_site, http_site))
+    legacy = by_id(report)["tls.legacy"]
+
+    assert legacy["status"] == "fail"
+    assert legacy["severity"] == "high"
+    # The normal handshake still negotiates the best version available.
+    assert by_id(report)["tls.protocol"]["status"] == "pass"
+
+
+def test_modern_server_refuses_obsolete_tls(ca, https_site, http_site):
+    report = run_scan(HOSTNAME, environment(ca, https_site, http_site))
+
+    assert by_id(report)["tls.legacy"]["status"] == "pass"

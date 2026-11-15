@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vigie-worker"
-version = "0.2.0"
+version = "0.3.0"
 description = "Scan worker for Vigie: consumes jobs from Redis and runs security checks."
 requires-python = ">=3.12"
 dependencies = [

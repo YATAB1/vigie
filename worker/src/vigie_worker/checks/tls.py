@@ -1,7 +1,8 @@
 """TLS checks: certificate validity, expiry, and negotiated protocol version."""
 
 import ssl
-from dataclasses import dataclass
+import warnings
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 from cryptography import x509
@@ -24,9 +25,46 @@ class TlsObservation:
     protocol: str | None = None
     verify_error: str | None = None
     not_after: datetime | None = None
+    # Set when the server still accepts TLS 1.0 or 1.1 ("TLSv1", "TLSv1.1").
+    legacy_protocol: str | None = None
 
 
 def observe_tls(
+    hostname: str, ip: str, port: int, timeout: float, context: ssl.SSLContext
+) -> TlsObservation:
+    """Describes the site's TLS setup, then checks whether obsolete versions are still accepted."""
+    observation = _observe_certificate(hostname, ip, port, timeout, context)
+    if not observation.reachable:
+        return observation
+    return replace(observation, legacy_protocol=_probe_legacy(hostname, ip, port, timeout))
+
+
+def _probe_legacy(hostname: str, ip: str, port: int, timeout: float) -> str | None:
+    """Offers only TLS 1.0 and 1.1. A modern server refuses the handshake.
+
+    A normal client never negotiates these versions when 1.2 is available, so
+    asking for them explicitly is the only way to learn whether they are enabled.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE  # only the protocol version matters here
+        try:
+            context.minimum_version = ssl.TLSVersion.TLSv1
+            context.maximum_version = ssl.TLSVersion.TLSv1_1
+            # OpenSSL disables the old cipher suites by default; re-allow them for the probe.
+            context.set_ciphers("DEFAULT:@SECLEVEL=0")
+        except (ValueError, ssl.SSLError):
+            return None  # this OpenSSL build cannot speak TLS 1.0/1.1 at all
+    try:
+        with open_tls(hostname, ip, port, context, timeout) as sock:
+            return sock.version()
+    except (OSError, ssl.SSLError):
+        return None
+
+
+def _observe_certificate(
     hostname: str, ip: str, port: int, timeout: float, context: ssl.SSLContext
 ) -> TlsObservation:
     """Handshakes with certificate verification on, then without if it fails,
@@ -81,6 +119,7 @@ def analyze_tls(observation: TlsObservation, now: datetime) -> list[Check]:
         _check_certificate(observation),
         _check_expiry(observation, now),
         _check_protocol(observation),
+        _check_legacy(observation),
     ]
 
 
@@ -160,3 +199,18 @@ def _check_protocol(observation: TlsObservation) -> Check:
         f"Connexion négociée en {protocol}, une version obsolète.",
         "Désactiver TLS 1.0 et 1.1 ; n'accepter que TLS 1.2 et 1.3.",
     )
+
+
+def _check_legacy(observation: TlsObservation) -> Check:
+    title = "Protocoles obsolètes"
+    if observation.legacy_protocol:
+        return failed(
+            "tls.legacy",
+            CATEGORY,
+            title,
+            Severity.HIGH,
+            f"Le serveur accepte encore {observation.legacy_protocol}, une version de TLS "
+            "abandonnée par les navigateurs et vulnérable à des attaques connues.",
+            "Désactiver TLS 1.0 et 1.1 dans la configuration du serveur ; garder 1.2 et 1.3.",
+        )
+    return passed("tls.legacy", CATEGORY, title, "Le serveur refuse TLS 1.0 et 1.1.")

@@ -80,3 +80,15 @@ def test_grades():
         "F",
         "F",
     ]
+
+
+def test_server_still_accepting_tls_1_1_is_high():
+    observed = TlsObservation(
+        reachable=True,
+        protocol="TLSv1.3",
+        not_after=NOW + timedelta(days=90),
+        legacy_protocol="TLSv1.1",
+    )
+    check = by_id(analyze_tls(observed, NOW))["tls.legacy"]
+    assert (check.status, check.severity) == (Status.FAIL, Severity.HIGH)
+    assert "TLSv1.1" in check.detail
