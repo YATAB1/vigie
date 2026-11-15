@@ -1,0 +1,19 @@
+# Copy to terraform.tfvars (never committed) and fill in.
+
+subscription_id = "00000000-0000-0000-0000-000000000000"
+
+# Optional: an administrator account created at startup.
+# admin_email    = "you@example.com"
+# admin_password = "a long passphrase here"
+
+# Optional: your public IP, to connect Power BI to the database.
+# reporting_ip = "203.0.113.10"
+
+# Optional: SMTP server for alert emails (Brevo, SendGrid, Mailgun...).
+# mail = {
+#   host     = "smtp-relay.brevo.com"
+#   port     = 587
+#   username = "login"
+#   from     = "alertes@your-domain.com"
+# }
+# mail_password = "smtp key"

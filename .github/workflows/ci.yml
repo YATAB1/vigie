@@ -73,6 +73,41 @@ jobs:
       - name: Build
         run: npm run build
 
+  database:
+    name: Database (PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: vigie
+          POSTGRES_USER: vigie
+          POSTGRES_PASSWORD: ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U vigie"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGUSER: vigie
+      PGPASSWORD: ci-only
+      PGDATABASE: vigie
+    steps:
+      - uses: actions/checkout@v4
+      # The API tests run on H2; this job proves the same migrations and the
+      # PostgreSQL-only reporting views work on the real database engine.
+      - name: Apply migrations in order
+        run: |
+          for f in api/src/main/resources/db/migration/V*__*.sql; do
+            psql -v ON_ERROR_STOP=1 -q -f "$f"
+          done
+          psql -v ON_ERROR_STOP=1 -q -f api/src/main/resources/db/analytics/R__analytics_views.sql
+      - name: Check the reporting views
+        run: psql -v ON_ERROR_STOP=1 -q -f api/src/test/sql/analytics_check.sql
+
   docker:
     name: Docker images
     runs-on: ubuntu-latest
@@ -85,3 +120,28 @@ jobs:
         run: |
           cp .env.example .env
           docker compose build
+
+  publish:
+    name: Publish images
+    # Only code that passed every check on main is published.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [api, worker, web, database, docker]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Log in to GitHub Container Registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Build and push
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          for service in api worker web; do
+            image="ghcr.io/${owner}/vigie-${service}"
+            args=()
+            # On Azure, the API is reached inside the Container Apps environment by its app name.
+            if [ "$service" = web ]; then args=(--build-arg API_URL=http://vigie-api); fi
+            docker build "${args[@]}" -t "${image}:${GITHUB_SHA}" -t "${image}:latest" "./${service}"
+            docker push --all-tags "${image}"
+          done

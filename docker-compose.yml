@@ -29,6 +29,11 @@ services:
       timeout: 3s
       retries: 10
 
+  mailpit:
+    image: axllent/mailpit:v1.21
+    ports:
+      - "127.0.0.1:8025:8025"
+
   api:
     build: ./api
     environment:
@@ -39,6 +44,10 @@ services:
       VIGIE_JWT_SECRET: ${VIGIE_JWT_SECRET:?Set VIGIE_JWT_SECRET in .env}
       # The local stack is served over plain HTTP, so cookies cannot be Secure here.
       VIGIE_AUTH_SECURE_COOKIES: "false"
+      # Alert emails go to Mailpit locally: open http://localhost:8025 to read them.
+      SPRING_MAIL_HOST: mailpit
+      SPRING_MAIL_PORT: "1025"
+      VIGIE_PUBLIC_URL: http://localhost:3000
       VIGIE_ADMIN_EMAIL: ${VIGIE_ADMIN_EMAIL:-}
       VIGIE_ADMIN_PASSWORD: ${VIGIE_ADMIN_PASSWORD:-}
     depends_on:
@@ -46,6 +55,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      mailpit:
+        condition: service_started
     ports:
       - "127.0.0.1:8080:8080"
     healthcheck:

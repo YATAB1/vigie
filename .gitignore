@@ -24,3 +24,9 @@ web/next-env.d.ts
 .vscode/
 *.iml
 .DS_Store
+
+# Terraform (state files contain secrets)
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.*
+infra/terraform.tfvars
