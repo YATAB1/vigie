@@ -1,6 +1,6 @@
 {
   "name": "vigie-web",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -11,6 +11,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@fontsource-variable/bricolage-grotesque": "^5.3.0",
+    "@fontsource-variable/public-sans": "^5.3.0",
     "next": "16.4.6",
     "react": "19.3.0",
     "react-dom": "19.3.0"
