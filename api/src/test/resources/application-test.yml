@@ -3,6 +3,9 @@ spring:
     url: jdbc:h2:mem:vigie;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1
     username: sa
     password: ""
+  flyway:
+    # The analytics views use PostgreSQL features that H2 does not support.
+    locations: classpath:db/migration
   jpa:
     hibernate:
       ddl-auto: none
@@ -15,3 +18,6 @@ vigie:
   queue:
     # Tests call the result handler directly: no Redis is needed.
     consumer-enabled: false
+  schedule:
+    # Tests call the scheduling logic directly.
+    enabled: false

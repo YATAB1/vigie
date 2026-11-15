@@ -15,6 +15,7 @@ import io.github.yatab1.vigie.queue.ResultHandler;
 import io.github.yatab1.vigie.scan.Scan;
 import io.github.yatab1.vigie.scan.ScanRepository;
 import io.github.yatab1.vigie.scan.ScanService;
+import io.github.yatab1.vigie.support.RecordingAlertSender;
 import io.github.yatab1.vigie.support.RecordingJobQueue;
 import io.github.yatab1.vigie.user.UserRepository;
 import jakarta.servlet.http.Cookie;
@@ -49,6 +50,12 @@ class DomainScanFlowTest {
         RecordingJobQueue recordingJobQueue() {
             return new RecordingJobQueue();
         }
+
+        @Bean
+        @Primary
+        RecordingAlertSender recordingAlertSender() {
+            return new RecordingAlertSender();
+        }
     }
 
     private static final String PASSWORD = "correct horse battery";
@@ -77,6 +84,9 @@ class DomainScanFlowTest {
     private RecordingJobQueue queue;
 
     @Autowired
+    private RecordingAlertSender alerts;
+
+    @Autowired
     private ResultHandler resultHandler;
 
     private MockMvc mockMvc;
@@ -90,6 +100,7 @@ class DomainScanFlowTest {
         refreshTokens.deleteAll();
         users.deleteAll();
         queue.clear();
+        alerts.clear();
         mockMvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
         alice = signUp("alice@example.com");
         bob = signUp("bob@example.com");
@@ -384,7 +395,97 @@ class DomainScanFlowTest {
                 .andExpect(jsonPath("$.status").value("FAILED"));
     }
 
+    @Test
+    void theDomainListShowsTheLatestGrade() throws Exception {
+        String domainId = verifiedDomain(alice, "example.com");
+        mockMvc.perform(get("/api/v1/domains").cookie(alice))
+                .andExpect(jsonPath("$[0].latestScan").doesNotExist());
+
+        String scanId = idOf(mockMvc.perform(
+                post("/api/v1/domains/" + domainId + "/scans").cookie(alice)).andReturn());
+        // A scan still running does not replace the last known grade.
+        mockMvc.perform(get("/api/v1/domains").cookie(alice))
+                .andExpect(jsonPath("$[0].latestScan").doesNotExist());
+
+        resultHandler.handle(scanResult(scanId, 80, "B"));
+
+        mockMvc.perform(get("/api/v1/domains").cookie(alice))
+                .andExpect(jsonPath("$[0].latestScan.grade").value("B"))
+                .andExpect(jsonPath("$[0].latestScan.score").value(80))
+                .andExpect(jsonPath("$[0].latestScan.checks").doesNotExist());
+        mockMvc.perform(get("/api/v1/domains/" + domainId).cookie(alice))
+                .andExpect(jsonPath("$.latestScan.grade").value("B"));
+    }
+
+    @Test
+    void dailyRescansOnlyTouchVerifiedDomainsWithoutARecentScan() throws Exception {
+        verifiedDomain(alice, "never-scanned.com");
+        String recent = verifiedDomain(alice, "recently-scanned.com");
+        mockMvc.perform(post("/api/v1/domains/" + recent + "/scans").cookie(alice))
+                .andExpect(status().isAccepted());
+        createDomain(bob, "unverified.com");
+        queue.clear();
+
+        assertThat(scanService.scanStaleDomains(Duration.ofHours(24))).isEqualTo(1);
+        assertThat(queue.jobs()).hasSize(1);
+        assertThat(queue.last().payload()).containsEntry("hostname", "never-scanned.com");
+
+        // Running it again right away queues nothing: every domain now has a recent scan.
+        assertThat(scanService.scanStaleDomains(Duration.ofHours(24))).isZero();
+    }
+
+    // ---------- alerts ----------
+
+    @Test
+    void aWorseGradeEmailsTheOwner() throws Exception {
+        String domainId = verifiedDomain(alice, "example.com");
+        completeScan(domainId, 80, "B");
+        assertThat(alerts.alerts()).isEmpty(); // a first scan has nothing to compare with
+
+        completeScan(domainId, 45, "D");
+
+        assertThat(alerts.alerts()).hasSize(1);
+        RecordingAlertSender.Alert alert = alerts.alerts().get(0);
+        assertThat(alert.to()).isEqualTo("alice@example.com");
+        assertThat(alert.subject()).contains("example.com").contains("de B à D");
+        assertThat(alert.body())
+                .contains("45/100")
+                .contains("HSTS")
+                .contains("/domaines/" + domainId);
+    }
+
+    @Test
+    void aBetterOrEqualGradeSendsNothing() throws Exception {
+        String domainId = verifiedDomain(alice, "example.com");
+        completeScan(domainId, 45, "D");
+        completeScan(domainId, 80, "B");
+        completeScan(domainId, 82, "B");
+
+        assertThat(alerts.alerts()).isEmpty();
+    }
+
+    @Test
+    void aFailedScanSendsNothing() throws Exception {
+        String domainId = verifiedDomain(alice, "example.com");
+        completeScan(domainId, 80, "B");
+        String scanId = idOf(mockMvc.perform(
+                post("/api/v1/domains/" + domainId + "/scans").cookie(alice)).andReturn());
+
+        resultHandler.handle("{\"job_id\":\"" + scanId + "\",\"type\":\"scan\",\"status\":\"failed\","
+                + "\"data\":{},\"error\":\"timeout\"}");
+
+        assertThat(alerts.alerts()).isEmpty();
+    }
+
     // ---------- helpers ----------
+
+    private void completeScan(String domainId, int score, String grade) throws Exception {
+        String scanId = idOf(mockMvc.perform(
+                        post("/api/v1/domains/" + domainId + "/scans").cookie(alice))
+                .andExpect(status().isAccepted())
+                .andReturn());
+        resultHandler.handle(scanResult(scanId, score, grade));
+    }
 
     private Cookie signUp(String email) throws Exception {
         String body = "{\"email\":\"" + email + "\",\"password\":\"" + PASSWORD + "\"}";

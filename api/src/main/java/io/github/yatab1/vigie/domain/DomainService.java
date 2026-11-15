@@ -40,6 +40,10 @@ public class DomainService {
         this.clock = clock;
     }
 
+    public List<Domain> listVerified() {
+        return domains.findAllByStatus(DomainStatus.VERIFIED);
+    }
+
     public List<Domain> list(UUID userId) {
         return domains.findAllByUserIdOrderByCreatedAtDesc(userId);
     }
@@ -96,7 +100,7 @@ public class DomainService {
             jobQueue.enqueue(jobId, "dns_txt", Map.of("name", domain.challengeRecordName()));
         } catch (RuntimeException exception) {
             log.error("Cannot enqueue verification job", exception);
-            domain.verificationFailed("Verification is temporarily unavailable");
+            domain.verificationFailed("La vérification est indisponible pour le moment.");
             domains.save(domain);
             throw new ApiException(
                     HttpStatus.SERVICE_UNAVAILABLE, "Verification is temporarily unavailable");
@@ -111,13 +115,13 @@ public class DomainService {
             return;
         }
         if (!result.succeeded()) {
-            domain.verificationFailed("The DNS lookup failed, try again in a few minutes");
+            domain.verificationFailed("La recherche DNS a échoué. Réessayez dans quelques minutes.");
         } else if (challengePublished(domain, result)) {
             domain.markVerified(clock.instant());
             log.info("Domain {} verified", domain.getId());
         } else {
-            domain.verificationFailed(
-                    "TXT record not found yet. DNS changes can take a few minutes to appear");
+            domain.verificationFailed("L'enregistrement TXT est introuvable pour l'instant. "
+                    + "Un changement DNS peut prendre quelques minutes à apparaître.");
         }
         domains.save(domain);
     }

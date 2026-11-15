@@ -35,6 +35,7 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final AuthProperties properties;
+    private final LoginThrottle throttle;
     private final Clock clock;
     private final SecureRandom random = new SecureRandom();
 
@@ -47,12 +48,14 @@ public class AuthService {
             PasswordEncoder passwordEncoder,
             JwtService jwtService,
             AuthProperties properties,
+            LoginThrottle throttle,
             Clock clock) {
         this.users = users;
         this.refreshTokens = refreshTokens;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
         this.properties = properties;
+        this.throttle = throttle;
         this.clock = clock;
         this.dummyPasswordHash = passwordEncoder.encode("dummy-password-for-timing");
     }
@@ -79,15 +82,20 @@ public class AuthService {
 
     @Transactional
     public AuthSession login(String rawEmail, String password) {
-        Optional<User> found = users.findByEmail(normalizeEmail(rawEmail));
+        String email = normalizeEmail(rawEmail);
+        // Checked before bcrypt: a blocked attempt costs no hashing time.
+        throttle.check(email);
+        Optional<User> found = users.findByEmail(email);
         // Always run bcrypt, even for an unknown email. Otherwise the response time
         // would reveal which emails have an account.
         String hash = found.map(User::getPasswordHash).orElse(dummyPasswordHash);
         boolean passwordMatches = fitsBcrypt(password) && passwordEncoder.matches(password, hash);
         if (found.isEmpty() || !passwordMatches) {
+            throttle.recordFailure(email);
             // Same message for "unknown email" and "wrong password".
             throw new ApiException(HttpStatus.UNAUTHORIZED, "Invalid email or password");
         }
+        throttle.reset(email);
         return openSession(found.get());
     }
 

@@ -14,6 +14,8 @@ public interface DomainRepository extends JpaRepository<Domain, UUID> {
 
     Optional<Domain> findByVerificationJobId(UUID verificationJobId);
 
+    List<Domain> findAllByStatus(DomainStatus status);
+
     boolean existsByUserIdAndHostname(UUID userId, String hostname);
 
     long countByUserId(UUID userId);

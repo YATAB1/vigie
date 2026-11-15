@@ -45,12 +45,16 @@ class AuthFlowTest {
     @Autowired
     private PasswordEncoder passwordEncoder;
 
+    @Autowired
+    private LoginThrottle throttle;
+
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
         refreshTokens.deleteAll();
         users.deleteAll();
+        throttle.clear();
         mockMvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
     }
 
@@ -155,6 +159,45 @@ class AuthFlowTest {
         assertThat(wrongPassword.getResponse().getContentAsString())
                 .isEqualTo(unknownEmail.getResponse().getContentAsString());
         assertThat(wrongPassword.getResponse().getCookie(AuthCookies.ACCESS)).isNull();
+    }
+
+    @Test
+    void repeatedFailuresBlockTheAccountForAWhile() throws Exception {
+        register(EMAIL, PASSWORD);
+        for (int i = 0; i < LoginThrottle.MAX_FAILURES; i++) {
+            mockMvc.perform(json("/api/v1/auth/login", EMAIL, "wrong password " + i))
+                    .andExpect(status().isUnauthorized());
+        }
+
+        // Even the right password is refused while the account is blocked.
+        mockMvc.perform(json("/api/v1/auth/login", EMAIL, PASSWORD))
+                .andExpect(status().isTooManyRequests());
+        // Other accounts are not affected.
+        mockMvc.perform(json("/api/v1/auth/login", "someone-else@example.com", PASSWORD))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void unknownEmailsAreThrottledLikeRealOnes() throws Exception {
+        for (int i = 0; i < LoginThrottle.MAX_FAILURES; i++) {
+            mockMvc.perform(json("/api/v1/auth/login", "nobody@example.com", PASSWORD));
+        }
+
+        // Same answer as for an existing account: the limit reveals nothing.
+        mockMvc.perform(json("/api/v1/auth/login", "nobody@example.com", PASSWORD))
+                .andExpect(status().isTooManyRequests());
+    }
+
+    @Test
+    void aSuccessfulSignInClearsPastFailures() throws Exception {
+        register(EMAIL, PASSWORD);
+        for (int i = 0; i < LoginThrottle.MAX_FAILURES - 1; i++) {
+            mockMvc.perform(json("/api/v1/auth/login", EMAIL, "wrong password " + i));
+        }
+        mockMvc.perform(json("/api/v1/auth/login", EMAIL, PASSWORD)).andExpect(status().isOk());
+
+        mockMvc.perform(json("/api/v1/auth/login", EMAIL, "wrong again!!"))
+                .andExpect(status().isUnauthorized());
     }
 
     // ---------- access control ----------

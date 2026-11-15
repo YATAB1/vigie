@@ -7,12 +7,14 @@ import io.github.yatab1.vigie.queue.JobQueue;
 import io.github.yatab1.vigie.queue.QueueProperties;
 import io.github.yatab1.vigie.queue.WorkerResult;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,6 +33,7 @@ public class ScanService {
     private final JobQueue jobQueue;
     private final QueueProperties queueProperties;
     private final ObjectMapper mapper;
+    private final ApplicationEventPublisher events;
     private final Clock clock;
 
     public ScanService(
@@ -39,27 +42,56 @@ public class ScanService {
             JobQueue jobQueue,
             QueueProperties queueProperties,
             ObjectMapper mapper,
+            ApplicationEventPublisher events,
             Clock clock) {
         this.scans = scans;
         this.domains = domains;
         this.jobQueue = jobQueue;
         this.queueProperties = queueProperties;
         this.mapper = mapper;
+        this.events = events;
         this.clock = clock;
     }
 
-    /** Queues a scan. Only a domain whose ownership was proven can be scanned. */
+    /** Queues a scan requested by the owner. Only a domain whose ownership was proven can be scanned. */
     public Scan request(UUID userId, UUID domainId) {
-        Domain domain = domains.get(userId, domainId);
+        return start(domains.get(userId, domainId));
+    }
+
+    /**
+     * Rescans every verified domain that has not been scanned in the last
+     * {@code interval}. Called once a day by {@link ScheduledScans}.
+     *
+     * @return the number of scans queued
+     */
+    public int scanStaleDomains(Duration interval) {
+        Instant since = clock.instant().minus(interval);
+        int queued = 0;
+        for (Domain domain : domains.listVerified()) {
+            if (scans.existsByDomainIdAndCreatedAtAfter(domain.getId(), since)) {
+                continue;
+            }
+            try {
+                start(domain);
+                queued++;
+            } catch (ApiException exception) {
+                // A scan already running, or the queue is down: try again tomorrow.
+                log.warn("Scheduled scan skipped for domain {}: {}", domain.getId(), exception.getMessage());
+            }
+        }
+        return queued;
+    }
+
+    private Scan start(Domain domain) {
         if (!domain.isVerified()) {
             throw new ApiException(
                     HttpStatus.CONFLICT, "Verify ownership of this domain before scanning it");
         }
-        if (scans.existsByDomainIdAndStatus(domainId, ScanStatus.QUEUED)) {
+        if (scans.existsByDomainIdAndStatus(domain.getId(), ScanStatus.QUEUED)) {
             throw new ApiException(HttpStatus.CONFLICT, "A scan is already running for this domain");
         }
         // Saved (and committed) before the job is sent, so the result always finds its scan.
-        Scan scan = scans.save(new Scan(domainId, clock.instant()));
+        Scan scan = scans.save(new Scan(domain.getId(), clock.instant()));
         try {
             jobQueue.enqueue(scan.getId(), "scan", Map.of("hostname", domain.getHostname()));
         } catch (RuntimeException exception) {
@@ -109,6 +141,9 @@ public class ScanService {
             applyReport(scan, result.data(), now);
         }
         scans.save(scan);
+        if (scan.getStatus() == ScanStatus.SUCCEEDED) {
+            events.publishEvent(new ScanCompletedEvent(scan.getId(), scan.getDomainId()));
+        }
     }
 
     private void applyReport(Scan scan, JsonNode data, Instant now) {

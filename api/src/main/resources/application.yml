@@ -5,6 +5,9 @@ spring:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/vigie}
     username: ${SPRING_DATASOURCE_USERNAME:vigie}
     password: ${SPRING_DATASOURCE_PASSWORD:}
+  flyway:
+    # db/analytics holds PostgreSQL-only reporting views; the test profile skips it.
+    locations: classpath:db/migration,classpath:db/analytics
   jpa:
     # No lazy loading while rendering the response: queries happen in services only.
     open-in-view: false
@@ -14,7 +17,11 @@ spring:
   data:
     redis:
       host: ${REDIS_HOST:localhost}
-      port: 6379
+      port: ${REDIS_PORT:6379}
+      # Managed Redis (Azure Cache for Redis) requires a password and TLS on port 6380.
+      password: ${REDIS_PASSWORD:}
+      ssl:
+        enabled: ${REDIS_SSL:false}
       repositories:
         # Redis is only used as a job queue, not as a Spring Data store.
         enabled: false
@@ -49,6 +56,13 @@ vigie:
     consumer-enabled: true
     # A scan with no result after this delay is marked as failed.
     scan-timeout: 5m
+  schedule:
+    # Daily automatic rescans of verified domains.
+    enabled: ${VIGIE_SCHEDULE_ENABLED:true}
+  alerts:
+    # Email alerts are sent only when SPRING_MAIL_HOST is set (see README).
+    from: ${VIGIE_ALERTS_FROM:alertes@vigie.local}
+    public-url: ${VIGIE_PUBLIC_URL:http://localhost:3000}
   admin:
     # Optional: creates this administrator at startup if it does not exist yet.
     email: ${VIGIE_ADMIN_EMAIL:}

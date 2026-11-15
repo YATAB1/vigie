@@ -1,5 +1,7 @@
 package io.github.yatab1.vigie.domain;
 
+import io.github.yatab1.vigie.scan.Scan;
+import io.github.yatab1.vigie.scan.ScanResponse;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -9,7 +11,8 @@ public record DomainResponse(
         DomainStatus status,
         Verification verification,
         Instant verifiedAt,
-        Instant createdAt) {
+        Instant createdAt,
+        ScanResponse latestScan) {
 
     /** The DNS record to publish, and the state of the last check. */
     public record Verification(
@@ -17,6 +20,11 @@ public record DomainResponse(
     }
 
     public static DomainResponse from(Domain domain) {
+        return from(domain, null);
+    }
+
+    /** {@code latestScan} is the most recent successful scan, or null if there is none. */
+    public static DomainResponse from(Domain domain, Scan latestScan) {
         Verification verification = new Verification(
                 "TXT",
                 domain.challengeRecordName(),
@@ -29,6 +37,7 @@ public record DomainResponse(
                 domain.getStatus(),
                 verification,
                 domain.getVerifiedAt(),
-                domain.getCreatedAt());
+                domain.getCreatedAt(),
+                latestScan == null ? null : ScanResponse.summary(latestScan));
     }
 }

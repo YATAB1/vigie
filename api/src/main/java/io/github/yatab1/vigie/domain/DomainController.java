@@ -1,6 +1,9 @@
 package io.github.yatab1.vigie.domain;
 
 import io.github.yatab1.vigie.auth.AuthenticatedUser;
+import io.github.yatab1.vigie.scan.Scan;
+import io.github.yatab1.vigie.scan.ScanRepository;
+import io.github.yatab1.vigie.scan.ScanStatus;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
@@ -20,14 +23,19 @@ import org.springframework.web.bind.annotation.RestController;
 public class DomainController {
 
     private final DomainService domains;
+    private final ScanRepository scans;
 
-    public DomainController(DomainService domains) {
+    public DomainController(DomainService domains, ScanRepository scans) {
         this.domains = domains;
+        this.scans = scans;
     }
 
+    /** Each domain comes with its latest grade, so the list can show it directly. */
     @GetMapping
     public List<DomainResponse> list(@AuthenticationPrincipal AuthenticatedUser user) {
-        return domains.list(user.id()).stream().map(DomainResponse::from).toList();
+        return domains.list(user.id()).stream()
+                .map(domain -> DomainResponse.from(domain, latestSuccessfulScan(domain)))
+                .toList();
     }
 
     @PostMapping
@@ -40,7 +48,8 @@ public class DomainController {
 
     @GetMapping("/{id}")
     public DomainResponse get(@AuthenticationPrincipal AuthenticatedUser user, @PathVariable UUID id) {
-        return DomainResponse.from(domains.get(user.id(), id));
+        Domain domain = domains.get(user.id(), id);
+        return DomainResponse.from(domain, latestSuccessfulScan(domain));
     }
 
     @DeleteMapping("/{id}")
@@ -56,5 +65,10 @@ public class DomainController {
             @AuthenticationPrincipal AuthenticatedUser user, @PathVariable UUID id) {
         Domain domain = domains.requestVerification(user.id(), id);
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(DomainResponse.from(domain));
+    }
+
+    private Scan latestSuccessfulScan(Domain domain) {
+        return scans.findFirstByDomainIdAndStatusOrderByCreatedAtDesc(domain.getId(), ScanStatus.SUCCEEDED)
+                .orElse(null);
     }
 }
