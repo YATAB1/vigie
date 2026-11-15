@@ -10,6 +10,8 @@ recommandations de correction.
 > **État du projet :** en développement actif. Voir la [feuille de route](#feuille-de-route)
 > pour ce qui est livré et ce qui s'en vient.
 
+![Rapport d'un domaine dans Vigie](docs/rapport.png)
+
 ## Architecture
 
 ```mermaid
@@ -59,6 +61,7 @@ Sous Windows, `openssl` est fourni avec Git : lancer la commande dans Git Bash.
 - Santé de l'API : http://localhost:8080/actuator/health
 
 Tous les ports sont liés à `127.0.0.1` : rien n'est exposé sur le réseau local.
+Les courriels d'alerte envoyés en local sont visibles sur http://localhost:8025.
 
 ## Développement
 
@@ -80,8 +83,9 @@ npm ci
 npm run lint && npm run typecheck && npm test
 ```
 
-La CI (GitHub Actions) exécute ces mêmes commandes à chaque push, puis
-construit les trois images Docker.
+La CI (GitHub Actions) exécute ces mêmes commandes à chaque push, applique les
+migrations sur un vrai PostgreSQL et vérifie les vues d'analyse, construit les
+trois images Docker, puis les publie si tout est vert sur `main`.
 
 ## Authentification
 
@@ -118,11 +122,13 @@ Choix de sécurité :
 - **Aucune route ne peut attribuer le rôle administrateur.** Le premier
   administrateur est créé au démarrage à partir de variables d'environnement.
 
-Limites connues, prévues à l'étape de durcissement : pas encore de limitation
-du nombre de tentatives de connexion, et un changement de rôle prend jusqu'à
-15 minutes à s'appliquer (durée de vie du jeton d'accès). Les tests de l'API
-tournent sur H2 en mode PostgreSQL ; la migration SQL est validée séparément
-sur PostgreSQL.
+- **Limite de tentatives** : après 5 échecs en 15 minutes, un compte refuse
+  les connexions (réponse 429) jusqu'à expiration du plus ancien échec. La
+  limite s'applique aussi aux courriels sans compte, pour ne rien révéler.
+
+Limites connues : le compteur de tentatives est en mémoire, donc propre à une
+instance de l'API (le déploiement en utilise une seule) ; un changement de rôle
+prend jusqu'à 15 minutes à s'appliquer (durée de vie du jeton d'accès).
 
 ## Domaines et scans
 
@@ -155,7 +161,7 @@ différents, donc l'un ne peut pas profiter de la preuve de l'autre.
 
 | Catégorie | Vérifications |
 |---|---|
-| TLS | Connexion HTTPS, validité du certificat, date d'expiration, version négociée |
+| TLS | Connexion HTTPS, validité du certificat, date d'expiration, version négociée, acceptation de TLS 1.0/1.1 |
 | En-têtes | HSTS, Content-Security-Policy, X-Content-Type-Options, clickjacking, Referrer-Policy, Permissions-Policy, divulgation de versions, attributs des cookies |
 | Transport | Redirection de HTTP vers HTTPS |
 | Courriel | SPF, DMARC |
@@ -188,6 +194,111 @@ sortant passe par le worker, qui n'a accès ni à la base ni aux secrets.
 Les résultats renvoyés par le worker ne sont appliqués que s'ils correspondent
 à une tâche que l'API a créée et qui est encore en attente. Un message forgé ou
 rejoué est ignoré.
+
+### Scans automatiques
+
+Chaque domaine vérifié est réanalysé une fois par jour, ce qui alimente
+l'historique des scores. Un scan sans réponse du worker après 5 minutes est
+marqué en échec.
+
+### Alertes
+
+Quand un scan donne une note moins bonne que le précédent, le propriétaire du
+domaine reçoit un courriel avec l'ancienne et la nouvelle note, les points à
+corriger et un lien vers le rapport. L'envoi a lieu après l'enregistrement du
+rapport : une panne du serveur de courriel ne fait jamais perdre un scan.
+
+En local, les courriels sont captés par Mailpit : http://localhost:8025.
+
+## Interface
+
+L'interface Next.js couvre tout le parcours : création de compte, ajout d'un
+domaine (une adresse collée comme `https://exemple.com/contact` est réduite au
+nom de domaine), preuve de propriété avec l'enregistrement DNS à copier,
+lancement d'un scan, rapport détaillé et historique des scores.
+
+![Liste des domaines](docs/domaines.png)
+
+- Le navigateur ne manipule jamais les jetons : ils restent dans des cookies
+  `HttpOnly`, et `/api/*` est relayé vers l'API par Next.js (même origine).
+- Une session expirée est renouvelée automatiquement. Plusieurs requêtes qui
+  échouent en même temps partagent un seul renouvellement, sinon l'API
+  détecterait une réutilisation de jeton et fermerait toutes les sessions.
+- Les états d'attente (vérification DNS, scan en cours) sont suivis par
+  interrogation périodique, avec une limite.
+- Mise en page adaptée au téléphone, thème sombre, focus clavier visible.
+
+## Analyse des données
+
+Les rapports sont stockés en JSON dans PostgreSQL. Le schéma `analytics`
+expose des vues prêtes pour Power BI ou tout client SQL :
+
+| Vue | Contenu |
+|---|---|
+| `analytics.scan_facts` | Un scan terminé par ligne : domaine, note, durée |
+| `analytics.check_results` | Une vérification par ligne, extraite du JSON (`jsonb_array_elements`) |
+| `analytics.domain_latest` | Dernière note de chaque domaine et écart avec la précédente (`row_number`, `lag`) |
+| `analytics.check_failure_rates` | Pour chaque vérification, la part des domaines qui l'échouent actuellement |
+| `analytics.daily_summary` | Nombre de scans et score moyen par jour |
+
+Les vues sont une migration Flyway répétable (`db/analytics/R__analytics_views.sql`) :
+elles sont recréées dès que le fichier change.
+
+Pour brancher Power BI sans exposer les comptes ni les mots de passe, créer
+un utilisateur en lecture seule limité à ce schéma :
+
+```sql
+create role vigie_reporting login password '<mot de passe>';
+grant usage on schema analytics to vigie_reporting;
+grant select on all tables in schema analytics to vigie_reporting;
+alter default privileges in schema analytics grant select on tables to vigie_reporting;
+```
+
+Dans Power BI Desktop : *Obtenir les données*, *Base de données PostgreSQL*,
+serveur `localhost:5432`, base `vigie`, puis cet utilisateur. Il voit les vues,
+mais une requête sur la table `users` est refusée.
+
+## Déploiement sur Azure
+
+L'infrastructure est décrite en Terraform dans `infra/` :
+
+```mermaid
+flowchart LR
+    U[Internet] -- HTTPS --> W[vigie-web<br/>Container App]
+    W -- HTTP interne --> A[vigie-api<br/>Container App]
+    A --> P[(Azure Database<br/>for PostgreSQL)]
+    A <--> R[(Azure Cache<br/>for Redis)]
+    K[vigie-worker<br/>Container App] <--> R
+```
+
+- Seule l'interface est publique. L'API n'a qu'une entrée interne à
+  l'environnement Container Apps ; le worker n'en a aucune.
+- Les secrets (mot de passe de la base, clé Redis, clé de signature des
+  sessions) sont générés par Terraform et passés comme secrets Container Apps,
+  jamais écrits dans le code.
+- La CI publie les images sur GitHub Container Registry après chaque push sur
+  `main` qui passe tous les tests.
+
+Déployer :
+
+```bash
+az login
+cd infra
+cp terraform.tfvars.example terraform.tfvars   # y mettre l'identifiant d'abonnement
+terraform init
+terraform plan
+terraform apply
+terraform output web_url
+```
+
+Avant le premier déploiement, rendre publics les trois paquets `vigie-api`,
+`vigie-worker` et `vigie-web` (GitHub, onglet *Packages*, *Package settings*),
+pour que Azure puisse télécharger les images.
+
+Coût : la base, Redis et les conteneurs reviennent à quelques dizaines de
+dollars par mois ; vérifier avec le calculateur de prix Azure. `terraform destroy`
+supprime tout. L'état Terraform contient les secrets : il reste sur la machine
+et n'est jamais versionné.
 
 ## Contrat de messages
 
@@ -226,11 +337,15 @@ produit un résultat `failed` : une erreur ne fait jamais tomber le worker.
 - [x] Comptes : inscription, connexion, rôles
 - [x] Domaines, avec preuve de propriété par enregistrement DNS
 - [x] Scans : en-têtes HTTP, TLS, SPF/DMARC, calcul du score
-- [ ] Tableau de bord et historique
-- [ ] Scans planifiés et alertes
-- [ ] Durcissement : limitation des tentatives de connexion, tests sur PostgreSQL,
-      détection de TLS 1.0/1.1, revérification périodique de la propriété
-- [ ] Déploiement sur Azure
+- [x] Tableau de bord et historique
+- [x] Scans automatiques quotidiens
+- [x] Vues d'analyse pour Power BI
+- [x] Alertes par courriel quand une note baisse
+- [x] Durcissement : limitation des tentatives de connexion, vérification des
+      migrations sur PostgreSQL en CI, détection de TLS 1.0/1.1
+- [x] Infrastructure Azure en Terraform, publication des images par la CI
+- [ ] Revérification périodique de la propriété des domaines
+- [ ] Préférences d'alerte par utilisateur
 
 ## Structure
 
@@ -238,5 +353,7 @@ produit un résultat `failed` : une erreur ne fait jamais tomber le worker.
 api/       API REST (Spring Boot)
 worker/    Worker de scan (Python)
 web/       Interface (Next.js)
+infra/     Infrastructure Azure (Terraform)
+docs/      Captures d'écran
 .github/   Intégration continue
 ```
